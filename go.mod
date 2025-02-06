@@ -1,3 +1,3 @@
-module github.com/stratoberry/go-gpsd
+module github.com/Shihta/go-gpsd
 
-go 1.18
+go 1.22
