@@ -185,14 +185,37 @@ type ERRORReport struct {
 
 // Satellite describes a location of a GPS satellite
 type Satellite struct {
-	PRN    float64 `json:"PRN"`
+	PRN    int     `json:"PRN"`
 	Az     float64 `json:"az"`
 	El     float64 `json:"el"`
 	Ss     float64 `json:"ss"`
 	Used   bool    `json:"used"`
-	GnssId float64 `json:"gnssid"`
-	SvId   float64 `json:"svid"`
+	GnssId int     `json:"gnssid"`
+	SvId   int     `json:"svid"`
 	Health float64 `json:"health"`
+}
+
+func GnssIdToName(gnssId int) string {
+	switch gnssId {
+	case 0:
+		return "GPS"
+	case 1:
+		return "SBAS"
+	case 2:
+		return "Galileo"
+	case 3:
+		return "BeiDou"
+	case 4:
+		return "IMES"
+	case 5:
+		return "QZSS"
+	case 6:
+		return "GLONASS"
+	case 7:
+		return "IRNSS"
+	default:
+		return "Unknown"
+	}
 }
 
 // Dial opens a new connection to GPSD.
