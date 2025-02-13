@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -195,6 +198,191 @@ type Satellite struct {
 	Health float64 `json:"health"`
 }
 
+// GetUniqueId returns a unique satellite identifier
+func (s *Satellite) GetUniqueId() string {
+	return fmt.Sprintf("%d:%d", s.GnssId, s.SvId)
+}
+
+type GGAReport struct {
+	Type          string  // Message type (GNGGA)
+	Time          string  // UTC time in HHMMSS format
+	Latitude      float64 // Decimal degrees
+	LatitudeDir   string  // N or S
+	Longitude     float64 // Decimal degrees
+	LongitudeDir  string  // E or W
+	Quality       int     // GPS Quality indicator
+	NumSatellites int     // Number of satellites in use
+	HDOP          float64 // Horizontal dilution of precision
+	Altitude      float64 // Altitude above mean sea level
+	AltitudeUnit  string  // Usually 'M' for meters
+	Separation    float64 // Geoid separation
+	SepUnit       string  // Usually 'M' for meters
+	DiffAge       string  // Age of differential corrections
+	DiffStation   string  // Differential base station ID
+}
+
+type RMCReport struct {
+	Time             string  // UTC Time
+	Status           string  // V = data invalid, A = data valid
+	Latitude         float64 // Decimal degrees
+	LatitudeDir      string  // N/S
+	Longitude        float64 // Decimal degrees
+	LongitudeDir     string  // E/W
+	Speed            float64 // Speed over ground in knots
+	CourseOverGround float64 // Course over ground in degrees
+	Date             string  // Date in ddmmyy format
+	MagneticVar      float64 // Magnetic variation
+	MagneticVarDir   string  // Magnetic variation E/W
+	PosMode          string  // Positioning mode indicator
+	NavStatus        string  // Navigation status
+}
+
+func parseGGA(message string) (*GGAReport, error) {
+	parts := strings.Split(message, ",")
+	if len(parts) < 15 {
+		return nil, fmt.Errorf("invalid GGA message format")
+	}
+
+	// Remove checksum from last field
+	if idx := strings.Index(parts[14], "*"); idx != -1 {
+		parts[14] = parts[14][:idx]
+	}
+
+	// Convert latitude from DDMM.MMMMM to decimal degrees
+	lat, err := strconv.ParseFloat(parts[2], 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid latitude: %v", err)
+	}
+	latDeg := math.Floor(lat / 100)
+	latMin := lat - (latDeg * 100)
+	latitude := latDeg + latMin/60
+
+	// Convert longitude from DDDMM.MMMMM to decimal degrees
+	lon, err := strconv.ParseFloat(parts[4], 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid longitude: %v", err)
+	}
+	lonDeg := math.Floor(lon / 100)
+	lonMin := lon - (lonDeg * 100)
+	longitude := lonDeg + lonMin/60
+
+	quality, _ := strconv.Atoi(parts[6])
+	numSat, _ := strconv.Atoi(parts[7])
+	hdop, _ := strconv.ParseFloat(parts[8], 64)
+	alt, _ := strconv.ParseFloat(parts[9], 64)
+	sep, _ := strconv.ParseFloat(parts[11], 64)
+
+	// Convert latitude and apply sign based on direction
+	if parts[3] == "S" {
+		latitude = -latitude
+	}
+
+	// Convert longitude and apply sign based on direction
+	if parts[5] == "W" {
+		longitude = -longitude
+	}
+
+	return &GGAReport{
+		Type:          parts[0],
+		Time:          parts[1],
+		Latitude:      latitude,
+		LatitudeDir:   parts[3],
+		Longitude:     longitude,
+		LongitudeDir:  parts[5],
+		Quality:       quality,
+		NumSatellites: numSat,
+		HDOP:          hdop,
+		Altitude:      alt,
+		AltitudeUnit:  parts[10],
+		Separation:    sep,
+		SepUnit:       parts[12],
+		DiffAge:       parts[13],
+		DiffStation:   parts[14],
+	}, nil
+}
+
+func parseRMC(data string) (*RMCReport, error) {
+	parts := strings.Split(data, ",")
+	if len(parts) < 13 || !strings.HasPrefix(parts[0], "$GNRMC") {
+		return nil, fmt.Errorf("invalid RMC message")
+	}
+
+	rmc := &RMCReport{
+		Time:           parts[1],
+		Status:         parts[2],
+		LatitudeDir:    parts[4],
+		LongitudeDir:   parts[6],
+		Date:           parts[9],
+		MagneticVarDir: parts[11],
+		PosMode:        parts[12],
+	}
+
+	// Parse latitude
+	if lat, err := strconv.ParseFloat(parts[3], 64); err == nil {
+		degrees := math.Floor(lat / 100)
+		minutes := lat - (degrees * 100)
+		rmc.Latitude = degrees + minutes/60
+		if rmc.LatitudeDir == "S" {
+			rmc.Latitude = -rmc.Latitude
+		}
+	}
+
+	// Parse longitude
+	if lon, err := strconv.ParseFloat(parts[5], 64); err == nil {
+		degrees := math.Floor(lon / 100)
+		minutes := lon - (degrees * 100)
+		rmc.Longitude = degrees + minutes/60
+		if rmc.LongitudeDir == "W" {
+			rmc.Longitude = -rmc.Longitude
+		}
+	}
+
+	// Parse speed
+	if parts[7] != "" {
+		if speed, err := strconv.ParseFloat(parts[7], 64); err == nil {
+			rmc.Speed = speed
+		}
+	}
+
+	// Parse course over ground
+	if parts[8] != "" {
+		if cog, err := strconv.ParseFloat(parts[8], 64); err == nil {
+			rmc.CourseOverGround = cog
+		}
+	}
+
+	// Parse magnetic variation
+	if parts[10] != "" {
+		if magVar, err := strconv.ParseFloat(parts[10], 64); err == nil {
+			rmc.MagneticVar = magVar
+			if rmc.MagneticVarDir == "W" {
+				rmc.MagneticVar = -rmc.MagneticVar
+			}
+		}
+	}
+
+	return rmc, nil
+}
+
+func GGAQualityToString(quality int) string {
+	switch quality {
+	case 0:
+		return "No fix"
+	case 1:
+		return "autonomous GNSS fix"
+	case 2:
+		return "diﬀerential GNSS fix"
+	case 4:
+		return "RTK fixed"
+	case 5:
+		return "RTK float"
+	case 6:
+		return "estimated/dead reckoning fix"
+	default:
+		return "Unknown"
+	}
+}
+
 func GnssIdToName(gnssId int) string {
 	switch gnssId {
 	case 0:
@@ -250,7 +438,7 @@ func dialCommon(c net.Conn, err error) (session *Session, e error) {
 //	done := gpsd.Watch()
 //	<- done
 func (s *Session) Watch() (done chan bool) {
-	fmt.Fprintf(s.socket, "?WATCH={\"enable\":true,\"json\":true}")
+	fmt.Fprintf(s.socket, "?WATCH={\"enable\":true,\"json\":true,\"nmea\":true}")
 	done = make(chan bool)
 
 	go watch(done, s)
@@ -280,7 +468,7 @@ func (s *Session) AddFilter(class string, f Filter) error {
 
 	// Check that class is a valid class string
 	switch class {
-	case "TPV", "SKY", "GST", "ATT", "VERSION", "DEVICES", "PPS", "TOFF", "ERROR":
+	case "TPV", "SKY", "GST", "ATT", "VERSION", "DEVICES", "PPS", "TOFF", "ERROR", "GNGGA", "GNRMC":
 	default:
 		return errors.New("the provided class string is not a valid class")
 	}
@@ -316,6 +504,25 @@ func watch(done chan bool, s *Session) {
 	for {
 		if line, err := s.reader.ReadString('\n'); err == nil {
 			var reportPeek gpsdReport
+			if line[:6] == "$GNGGA" {
+				if ggaReport, err2 := parseGGA(line); err2 == nil {
+					s.deliverReport("GNGGA", ggaReport)
+				} else {
+					fmt.Println("GGA parsing error:", err)
+				}
+				continue
+			}
+			if line[:6] == "$GNRMC" {
+				if rmcReport, err2 := parseRMC(line); err2 == nil {
+					s.deliverReport("GNRMC", rmcReport)
+				} else {
+					fmt.Println("RMC parsing error:", err)
+				}
+				continue
+			}
+			if line[:1] != "{" {
+				continue
+			}
 			lineBytes := []byte(line)
 			if err = json.Unmarshal(lineBytes, &reportPeek); err == nil {
 				if len(s.filters[reportPeek.Class]) == 0 {
