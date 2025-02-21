@@ -234,7 +234,7 @@ type RMCReport struct {
 	MagneticVar      float64 // Magnetic variation
 	MagneticVarDir   string  // Magnetic variation E/W
 	PosMode          string  // Positioning mode indicator
-	NavStatus        string  // Navigation status
+	NavStatus        string  // Navigation status, N = No fix, A = Autonomous GNSS fix
 }
 
 func parseGGA(message string) (*GGAReport, error) {
@@ -249,22 +249,20 @@ func parseGGA(message string) (*GGAReport, error) {
 	}
 
 	// Convert latitude from DDMM.MMMMM to decimal degrees
-	lat, err := strconv.ParseFloat(parts[2], 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid latitude: %v", err)
+	latitude := 0.0
+	if lat, err := strconv.ParseFloat(parts[2], 64); err == nil {
+		latDeg := math.Floor(lat / 100)
+		latMin := lat - (latDeg * 100)
+		latitude = latDeg + latMin/60
 	}
-	latDeg := math.Floor(lat / 100)
-	latMin := lat - (latDeg * 100)
-	latitude := latDeg + latMin/60
 
 	// Convert longitude from DDDMM.MMMMM to decimal degrees
-	lon, err := strconv.ParseFloat(parts[4], 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid longitude: %v", err)
+	longitude := 0.0
+	if lon, err := strconv.ParseFloat(parts[4], 64); err == nil {
+		lonDeg := math.Floor(lon / 100)
+		lonMin := lon - (lonDeg * 100)
+		longitude = lonDeg + lonMin/60
 	}
-	lonDeg := math.Floor(lon / 100)
-	lonMin := lon - (lonDeg * 100)
-	longitude := lonDeg + lonMin/60
 
 	quality, _ := strconv.Atoi(parts[6])
 	numSat, _ := strconv.Atoi(parts[7])
@@ -508,7 +506,7 @@ func watch(done chan bool, s *Session) {
 				if ggaReport, err2 := parseGGA(line); err2 == nil {
 					s.deliverReport("GNGGA", ggaReport)
 				} else {
-					fmt.Println("GGA parsing error:", err)
+					fmt.Println("GGA parsing error:", err2)
 				}
 				continue
 			}
